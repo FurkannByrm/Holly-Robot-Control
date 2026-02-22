@@ -147,7 +147,6 @@ void rt_loop_func(SPSCQueue<RobotState, 128>& s_q,
         ecrt_master_receive(master);
         ecrt_domain_process(domain);
 
-        // 1. DONANIMDAN HAM VERİYİ OKU
         uint8_t raw_input = *(domain_pd + off_el1008_in);
         
         // --- KRİTİK NOKTA: Butonun Durumu ---
@@ -155,37 +154,25 @@ void rt_loop_func(SPSCQueue<RobotState, 128>& s_q,
         // Aşağıdaki test fonksiyonu 0. bitin 1 olup olmadığına bakar.
         bool bit0_is_high = holly_bitset::test(raw_input, holly_bitset::Bit::DO0);
 
-        // 2. CLIENT'TAN GELEN SON KOMUTU GÜNCELLE
         auto cmd = c_q.pop();
         if (cmd) {
             client_requested_val = cmd->set_outputs;
             last_id = cmd->cmd_id;
         }
 
-        // 3. EMNİYET LOJİĞİ (HARDWARE OVERRIDE)
         uint8_t final_output = 0;
 
-        // --- BUTON TİPİNE GÖRE SEÇİM YAP ---
-        // DURUM A (Normally Closed): Buton boşta 1, basınca 0 veriyorsa:
         bool is_safe = bit0_is_high; 
         
-        // DURUM B (Normally Open): Buton boşta 0, basınca 1 veriyorsa:
-        // bool is_safe = !bit0_is_high; 
 
         if (is_safe) {
-            // Sistem güvenli: Client ne derse o
             final_output = client_requested_val;
         } else {
-            // Emniyet ihlali: Her şeyi KES
             final_output = 0;
-            // Not: Burada client'tan gelen veriyi çöpe atmıyoruz, 
-            // sadece donanıma göndermiyoruz. Emniyet açılınca son komut devam eder.
         }
 
-        // 4. DONANIMA YAZ
         *(domain_pd + off_el2008_out) = final_output;
 
-        // 5. GERİ BİLDİRİM
         RobotState st{};
         st.seq_id = last_id;
         st.timestamp = (uint32_t)wakeup_time.tv_nsec;

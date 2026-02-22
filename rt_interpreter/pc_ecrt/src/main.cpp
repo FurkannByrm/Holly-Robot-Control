@@ -51,8 +51,6 @@ int main() {
 #include "protocol.hpp"
 #include "spsc_queue.hpp"
 
-// Global Kontrol ve Kuyruklar
-// Not: Kuyruk boyutunu robotun eksen sayısına göre 128-256 civarı tutmak yeterlidir.
 std::atomic<bool> running{true};
 SPSCQueue<RobotState, 128> state_queue;
 SPSCQueue<RobotCommand, 128> cmd_queue;
@@ -62,11 +60,9 @@ void signal_handler(int) {
     running = false; 
 }
 
-// --- Fonksiyon Bildirimleri ---
 extern void rt_loop_func(SPSCQueue<RobotState, 128>& s_q, SPSCQueue<RobotCommand, 128>& c_q, std::atomic<bool>& run);
 extern void network_server_func(SPSCQueue<RobotState, 128>& s_q, SPSCQueue<RobotCommand, 128>& c_q, std::atomic<bool>& run);
 
-// Thread'i çekirdeğe sabitleme (Affinity)
 void set_cpu_affinity(int cpu_id) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -80,8 +76,6 @@ int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    // --- KRİTİK ADIM: BELLEĞİ KİLİTLE ---
-    // Linux'un bu prosesin belleğini diske taşımasını engeller. Jitter'ı önlemek için şarttır.
     if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
         perror("mlockall failed");
         std::cerr << "Warning: Could not lock memory. Run with sudo!" << std::endl;
@@ -102,7 +96,6 @@ int main() {
         rt_loop_func(std::ref(state_queue), std::ref(cmd_queue), std::ref(running));
     });
 
-    // 2. Network Thread: TCP İletişimi
     std::thread nw_thread([&]() {
         set_cpu_affinity(2); // CPU 2 Network işlerine bakar
         network_server_func(std::ref(state_queue), std::ref(cmd_queue), std::ref(running));
@@ -112,7 +105,6 @@ int main() {
     std::cout << "RT Thread: CPU 1, Priority: SCHED_FIFO 95" << std::endl;
     std::cout << "NW Thread: CPU 2, Priority: Standard" << std::endl;
 
-    // Join: Ana thread burada bekler
     if (rt_thread.joinable()) rt_thread.join();
     if (nw_thread.joinable()) nw_thread.join();
 
