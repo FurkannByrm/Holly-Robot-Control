@@ -137,12 +137,14 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
                     extState.system_ready = state->system_ready;
                     // cmd_ack, cmd_status, current_pos, current_axes
                     // currently no actual motion hardware — zeros (simulated)
-                    send(client_socket, &extState, sizeof(GrsRobotState), 0);
+                    ssize_t sent = send(client_socket, &extState, sizeof(GrsRobotState), MSG_NOSIGNAL);
+                    if (sent <= 0) break;  // Client disconnected
                 }
             } else {
                 auto state = s_q.pop();
                 if (state) {
-                    send(client_socket, &(*state), sizeof(RobotState), 0);
+                    ssize_t sent = send(client_socket, &(*state), sizeof(RobotState), MSG_NOSIGNAL);
+                    if (sent <= 0) break;  // Client disconnected
                 }
             }
 
@@ -205,7 +207,14 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
         }
         close(client_socket);
         ext_mode.store(false);
-        std::cout << "[Network] Client disconnected." << std::endl;
+        
+        // Clear all outputs when client disconnects (safety)
+        RobotCommand clearCmd{};
+        clearCmd.set_outputs = 0;
+        clearCmd.soft_stops = 0;
+        c_q.push(clearCmd);
+        
+        std::cout << "[Network] Client disconnected. Outputs cleared." << std::endl;
     }
     close(server_fd);
 }

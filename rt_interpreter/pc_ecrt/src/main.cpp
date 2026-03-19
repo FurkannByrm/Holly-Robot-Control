@@ -28,6 +28,7 @@ extern void network_server_func(SPSCQueue<RobotState, 128>& s_q,
 int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    signal(SIGPIPE, SIG_IGN);  // Prevent crash when TCP client disconnects
     
     if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
         std::cerr << "mlockall failed! Run with sudo." << std::endl;
