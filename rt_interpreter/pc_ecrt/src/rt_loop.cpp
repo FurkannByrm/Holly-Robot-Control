@@ -21,50 +21,84 @@ static ec_pdo_entry_reg_t domain_regs[] = {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// Log motion command positions (simulated — no actual servo yet)
+// Global robot position state (simulated — updated on each motion command)
 // ═══════════════════════════════════════════════════════════════
-static void logMotionTarget(const GrsRobotCommand& cmd) {
+static double g_pos[6]  = {0,0,0,0,0,0};  // X, Y, Z, A, B, C
+static double g_axes[6] = {0,0,0,0,0,0};  // A1, A2, A3, A4, A5, A6
+
+// Update global position from a motion command and log the change
+static void updateAndLogPosition(const GrsRobotCommand& cmd) {
     static const char* coordNames[] = {"X","Y","Z","A","B","C"};
     static const char* axisNames[]  = {"A1","A2","A3","A4","A5","A6"};
 
-    std::cout << "  [RT MOTION] " << grsCommandTypeName(cmd.cmd_type) << " → ";
-    
-    // Check for cartesian coordinates
-    bool hasCoords = false;
-    for (int i = 0; i < 6; i++) if (cmd.coords[i] != 0.0) { hasCoords = true; break; }
-    
+    // Check which fields this command carries
+    bool hasCoords = false, hasAxes = false;
+    for (int i = 0; i < 6; i++) {
+        if (cmd.coords[i] != 0.0) hasCoords = true;
+        if (cmd.axes[i] != 0.0) hasAxes = true;
+    }
+
+    // Determine if relative motion
+    bool isRelative = (cmd.cmd_type == GRS_CMD_PTP_REL ||
+                       cmd.cmd_type == GRS_CMD_LIN_REL ||
+                       cmd.cmd_type == GRS_CMD_CIRC_REL ||
+                       cmd.cmd_type == GRS_CMD_SPLINE_REL);
+
+    // Update global position
     if (hasCoords) {
-        std::cout << "pos={";
-        bool first = true;
         for (int i = 0; i < 6; i++) {
-            if (cmd.coords[i] != 0.0) {
-                if (!first) std::cout << ", ";
-                std::cout << coordNames[i] << "=" << std::fixed << std::setprecision(2) << cmd.coords[i];
-                first = false;
-            }
+            if (isRelative)
+                g_pos[i] += cmd.coords[i];
+            else if (cmd.coords[i] != 0.0)
+                g_pos[i] = cmd.coords[i];
         }
-        std::cout << "}";
     }
-    
-    // Check for axis values
-    bool hasAxes = false;
-    for (int i = 0; i < 6; i++) if (cmd.axes[i] != 0.0) { hasAxes = true; break; }
-    
     if (hasAxes) {
-        if (hasCoords) std::cout << " ";
-        std::cout << "axes={";
-        bool first = true;
         for (int i = 0; i < 6; i++) {
-            if (cmd.axes[i] != 0.0) {
-                if (!first) std::cout << ", ";
-                std::cout << axisNames[i] << "=" << std::fixed << std::setprecision(2) << cmd.axes[i];
-                first = false;
-            }
+            if (isRelative)
+                g_axes[i] += cmd.axes[i];
+            else if (cmd.axes[i] != 0.0)
+                g_axes[i] = cmd.axes[i];
+        }
+    }
+
+    // Log the command target
+    std::cout << "  [RT MOTION] " << grsCommandTypeName(cmd.cmd_type);
+    if (hasCoords) {
+        std::cout << " target={";
+        for (int i = 0; i < 6; i++) {
+            if (i > 0) std::cout << ", ";
+            std::cout << coordNames[i] << "=" << std::fixed << std::setprecision(2) << cmd.coords[i];
         }
         std::cout << "}";
     }
-    
+    if (hasAxes) {
+        std::cout << " target_axes={";
+        for (int i = 0; i < 6; i++) {
+            if (i > 0) std::cout << ", ";
+            std::cout << axisNames[i] << "=" << std::fixed << std::setprecision(2) << cmd.axes[i];
+        }
+        std::cout << "}";
+    }
     std::cout << std::endl;
+
+    // Log the current global position after update
+    if (hasCoords) {
+        std::cout << "  [RT POS]    global={";
+        for (int i = 0; i < 6; i++) {
+            if (i > 0) std::cout << ", ";
+            std::cout << coordNames[i] << "=" << std::fixed << std::setprecision(2) << g_pos[i];
+        }
+        std::cout << "}" << std::endl;
+    }
+    if (hasAxes) {
+        std::cout << "  [RT AXES]   global={";
+        for (int i = 0; i < 6; i++) {
+            if (i > 0) std::cout << ", ";
+            std::cout << axisNames[i] << "=" << std::fixed << std::setprecision(2) << g_axes[i];
+        }
+        std::cout << "}" << std::endl;
+    }
 }
 
 void rt_loop_func(SPSCQueue<RobotState, 128>& s_q, 
@@ -133,10 +167,16 @@ void rt_loop_func(SPSCQueue<RobotState, 128>& s_q,
                 }
             }
             
-            // Log motion commands (PTP/LIN/CIRC etc.)
+            // Log and update global position for motion commands
             if (ext_cmd->cmd_type >= GRS_CMD_PTP && 
                 ext_cmd->cmd_type <= GRS_CMD_SPLINE_REL) {
-                logMotionTarget(*ext_cmd);
+                updateAndLogPosition(*ext_cmd);
+            }
+            
+            // Log WAIT commands
+            if (ext_cmd->cmd_type == GRS_CMD_WAIT) {
+                std::cout << "  [RT WAIT]   duration=" << std::fixed 
+                          << std::setprecision(0) << ext_cmd->wait_time << "ms" << std::endl;
             }
         }
 
