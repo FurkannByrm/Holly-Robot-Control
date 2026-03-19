@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#pragma pack(push, 1)
+#pragma pack(push, 1) 
 
 // ═══════════════════════════════════════════════════════════════
 // Legacy Protocol — EtherCAT I/O only (EL1008 + EL2008)
@@ -45,8 +45,19 @@ enum GrsCommandType : uint8_t {
     GRS_CMD_SPLINE_REL = 8,
     GRS_CMD_WAIT       = 9,
     GRS_CMD_OUTPUT     = 10,
-    GRS_CMD_SET_ALL_OUTPUTS = 11,  // Legacy compat: set full output byte
+    GRS_CMD_SET_ALL_OUTPUTS = 11,
 };
+
+// Human-readable command type names for logging
+inline const char* grsCommandTypeName(uint8_t type) {
+    static const char* names[] = {
+        "NOP", "PTP", "PTP_REL", "LIN", "LIN_REL",
+        "CIRC", "CIRC_REL", "SPLINE", "SPLINE_REL",
+        "WAIT", "OUTPUT", "SET_ALL_OUTPUTS"
+    };
+    if (type <= GRS_CMD_SET_ALL_OUTPUTS) return names[type];
+    return "UNKNOWN";
+}
 
 // Extended command: carries motion, wait, and I/O data
 // Total: 128 bytes (fixed size for easy parsing)
@@ -85,26 +96,5 @@ struct GrsRobotState {
 // sizeof(GrsRobotState) = 128
 
 #pragma pack(pop)
-
-// ═══════════════════════════════════════════════════════════════
-// Helper: command type name for logging
-// ═══════════════════════════════════════════════════════════════
-inline const char* grsCommandTypeName(uint8_t type) {
-    switch (type) {
-        case GRS_CMD_NOP:        return "NOP";
-        case GRS_CMD_PTP:        return "PTP";
-        case GRS_CMD_PTP_REL:    return "PTP_REL";
-        case GRS_CMD_LIN:        return "LIN";
-        case GRS_CMD_LIN_REL:    return "LIN_REL";
-        case GRS_CMD_CIRC:       return "CIRC";
-        case GRS_CMD_CIRC_REL:   return "CIRC_REL";
-        case GRS_CMD_SPLINE:     return "SPLINE";
-        case GRS_CMD_SPLINE_REL: return "SPLINE_REL";
-        case GRS_CMD_WAIT:       return "WAIT";
-        case GRS_CMD_OUTPUT:     return "OUTPUT";
-        case GRS_CMD_SET_ALL_OUTPUTS: return "SET_ALL_OUTPUTS";
-        default:                 return "UNKNOWN";
-    }
-}
 
 #endif
