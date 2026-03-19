@@ -3,13 +3,92 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <iostream>
+#include <iomanip>
+#include <cstring>
 #include <atomic>
+#include <bitset>
 #include "protocol.hpp"
 #include "spsc_queue.hpp"
 
+// ═══════════════════════════════════════════════════════════════
+// Log extended GRS command in human-readable format
+// ═══════════════════════════════════════════════════════════════
+static void logGrsCommand(const GrsRobotCommand& cmd) {
+    std::cout << "  [GRS CMD #" << cmd.cmd_id << "] " 
+              << grsCommandTypeName(cmd.cmd_type);
+
+    switch (cmd.cmd_type) {
+        case GRS_CMD_OUTPUT:
+            std::cout << " $OUT[" << (int)(cmd.io_index + 1) << "] = " 
+                      << (cmd.io_value ? "TRUE" : "FALSE");
+            break;
+
+        case GRS_CMD_SET_ALL_OUTPUTS:
+            std::cout << " outputs=" << std::bitset<8>(cmd.set_outputs);
+            break;
+
+        case GRS_CMD_WAIT:
+            std::cout << " duration=" << cmd.wait_time << "ms";
+            break;
+
+        case GRS_CMD_PTP:
+        case GRS_CMD_PTP_REL:
+        case GRS_CMD_LIN:
+        case GRS_CMD_LIN_REL:
+        case GRS_CMD_CIRC:
+        case GRS_CMD_CIRC_REL:
+        case GRS_CMD_SPLINE:
+        case GRS_CMD_SPLINE_REL: {
+            // Check if coords or axes have non-zero values
+            bool hasCoords = false, hasAxes = false;
+            for (int i = 0; i < 6; i++) {
+                if (cmd.coords[i] != 0.0) hasCoords = true;
+                if (cmd.axes[i] != 0.0) hasAxes = true;
+            }
+            if (hasCoords) {
+                static const char* coordNames[] = {"X","Y","Z","A","B","C"};
+                std::cout << " pos={";
+                bool first = true;
+                for (int i = 0; i < 6; i++) {
+                    if (cmd.coords[i] != 0.0) {
+                        if (!first) std::cout << ", ";
+                        std::cout << coordNames[i] << "=" << std::fixed 
+                                  << std::setprecision(2) << cmd.coords[i];
+                        first = false;
+                    }
+                }
+                std::cout << "}";
+            }
+            if (hasAxes) {
+                std::cout << " axes={";
+                bool first = true;
+                for (int i = 0; i < 6; i++) {
+                    if (cmd.axes[i] != 0.0) {
+                        if (!first) std::cout << ", ";
+                        std::cout << "A" << (i+1) << "=" << std::fixed 
+                                  << std::setprecision(2) << cmd.axes[i];
+                        first = false;
+                    }
+                }
+                std::cout << "}";
+            }
+            break;
+        }
+
+        case GRS_CMD_NOP:
+        default:
+            break;
+    }
+
+    if (cmd.soft_stops) std::cout << " [SOFT_STOP]";
+    std::cout << std::endl;
+}
+
 void network_server_func(SPSCQueue<RobotState, 128>& s_q, 
                          SPSCQueue<RobotCommand, 128>& c_q, 
-                         std::atomic<bool>& run) {
+                         SPSCQueue<GrsRobotCommand, 128>& ext_cmd_q,
+                         std::atomic<bool>& run,
+                         std::atomic<bool>& ext_mode) {
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) return;
@@ -27,6 +106,7 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
     listen(server_fd, 3);
 
     std::cout << "[Network] Server listening on port 12345" << std::endl;
+    std::cout << "[Network] Supports legacy (16-byte) and extended (128-byte) protocol" << std::endl;
 
     while (run) {
         int client_socket = accept(server_fd, nullptr, nullptr);
@@ -38,26 +118,93 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
 
         std::cout << "[Network] Client connected!" << std::endl;
 
+        // Auto-detect protocol on first recv
+        bool client_extended = false;
+        bool protocol_detected = false;
+
         while (client_socket > 0 && run) {
-            // 1.State
-            auto state = s_q.pop();
-            if (state) {
-                send(client_socket, &(*state), sizeof(RobotState), 0);
+            // 1. State — send to client (format depends on detected protocol)
+            if (client_extended) {
+                // Build extended state from legacy queue + simulated position
+                auto state = s_q.pop();
+                if (state) {
+                    GrsRobotState extState{};
+                    extState.seq_id = state->seq_id;
+                    extState.timestamp = state->timestamp;
+                    extState.inputs = state->inputs;
+                    extState.outputs = state->outputs;
+                    extState.is_hardware_emg = state->is_hardware_emg;
+                    extState.system_ready = state->system_ready;
+                    // cmd_ack, cmd_status, current_pos, current_axes
+                    // currently no actual motion hardware — zeros (simulated)
+                    send(client_socket, &extState, sizeof(GrsRobotState), 0);
+                }
+            } else {
+                auto state = s_q.pop();
+                if (state) {
+                    send(client_socket, &(*state), sizeof(RobotState), 0);
+                }
             }
 
-            // 2.Command - MSG_DONTWAIT 
-            RobotCommand cmd;
-            int valread = recv(client_socket, &cmd, sizeof(RobotCommand), MSG_DONTWAIT);
-            if (valread == sizeof(RobotCommand)) {
+            // 2. Command — recv from client (MSG_DONTWAIT for non-blocking)
+            // Peek first to determine packet size
+            uint8_t peekBuf[128];
+            int valread = recv(client_socket, peekBuf, sizeof(peekBuf), MSG_DONTWAIT);
+            
+            if (valread == (int)sizeof(GrsRobotCommand)) {
+                // Extended 128-byte command
+                if (!protocol_detected) {
+                    client_extended = true;
+                    protocol_detected = true;
+                    std::cout << "[Network] Extended protocol detected (128-byte)" << std::endl;
+                }
+                GrsRobotCommand extCmd;
+                std::memcpy(&extCmd, peekBuf, sizeof(GrsRobotCommand));
+                
+                // Log the command
+                logGrsCommand(extCmd);
+
+                // Push to extended queue for rt_loop processing
+                ext_cmd_q.push(extCmd);
+
+                // Also create a legacy RobotCommand for I/O operations
+                // so rt_loop can apply outputs via EtherCAT
+                if (extCmd.cmd_type == GRS_CMD_OUTPUT) {
+                    RobotCommand legacyCmd{};
+                    legacyCmd.cmd_id = extCmd.cmd_id;
+                    legacyCmd.set_outputs = extCmd.set_outputs;
+                    legacyCmd.soft_stops = extCmd.soft_stops;
+                    c_q.push(legacyCmd);
+                } else if (extCmd.cmd_type == GRS_CMD_SET_ALL_OUTPUTS) {
+                    RobotCommand legacyCmd{};
+                    legacyCmd.cmd_id = extCmd.cmd_id;
+                    legacyCmd.set_outputs = extCmd.set_outputs;
+                    legacyCmd.soft_stops = extCmd.soft_stops;
+                    c_q.push(legacyCmd);
+                }
+
+            } else if (valread == (int)sizeof(RobotCommand)) {
+                // Legacy 16-byte command
+                if (!protocol_detected) {
+                    client_extended = false;
+                    protocol_detected = true;
+                    std::cout << "[Network] Legacy protocol detected (16-byte)" << std::endl;
+                }
+                RobotCommand cmd;
+                std::memcpy(&cmd, peekBuf, sizeof(RobotCommand));
                 c_q.push(cmd);
-            } else if (valread == 0) { //not connected
+
+            } else if (valread == 0) {
+                // Client disconnected
                 break;
             }
+            // valread < 0 means EAGAIN (no data available) — normal for non-blocking
             
-            // if queue is emty,processors is relaxed 
-            if (!state) usleep(500); 
+            // If queue is empty, relax the processor
+            if (!s_q.pop()) usleep(500);
         }
         close(client_socket);
+        ext_mode.store(false);
         std::cout << "[Network] Client disconnected." << std::endl;
     }
     close(server_fd);
