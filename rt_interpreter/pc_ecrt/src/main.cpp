@@ -23,7 +23,7 @@ int main() {
     }
 
     std::cout << "Starting Holly Bridge Node..." << std::endl;
-    std::cout << "Supports: Legacy I/O (16-byte) + Extended Motion (128-byte)" << std::endl;
+    std::cout << "Protocol: Unified 128-byte (Motion + I/O)" << std::endl;
 
     // RT Thread (Priority 95)
     std::thread rt_thread([&]() {

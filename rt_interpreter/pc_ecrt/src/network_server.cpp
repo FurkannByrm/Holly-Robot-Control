@@ -96,7 +96,7 @@ void network_server_func(SPSCQueue<GrsRobotState, 128>& s_q,
     listen(server_fd, 3);
 
     std::cout << "[Network] Server listening on port 12345" << std::endl;
-    std::cout << "[Network] Supports legacy (16-byte) and extended (128-byte) protocol" << std::endl;
+    std::cout << "[Network] Unified 128-byte protocol (Motion + I/O)" << std::endl;
 
     while (run) {
         int client_socket = accept(server_fd, nullptr, nullptr);
@@ -108,12 +108,8 @@ void network_server_func(SPSCQueue<GrsRobotState, 128>& s_q,
 
         std::cout << "[Network] Client connected!" << std::endl;
 
-        // Auto-detect protocol on first recv
-        bool protocol_detected = false;
-
         while (client_socket > 0 && run) {
-            // 1. State — send to client (format depends on detected protocol)
-            // Build extended state from legacy queue + simulated position
+            // 1. State — send 128-byte GrsRobotState to client
                 auto state = s_q.pop();
                 if (state) {
                     GrsRobotState extState{};
@@ -123,41 +119,20 @@ void network_server_func(SPSCQueue<GrsRobotState, 128>& s_q,
                     extState.outputs = state->outputs;
                     extState.is_hardware_emg = state->is_hardware_emg;
                     extState.system_ready = state->system_ready;
-                    // cmd_ack, cmd_status, current_pos, current_axes
-                    // currently no actual motion hardware — zeros (simulated)
                     ssize_t sent = send(client_socket, &extState, sizeof(GrsRobotState), MSG_NOSIGNAL);
                     if (sent <= 0) break;  // Client disconnected
                 }
              
-            // 2. Command — recv from client (MSG_DONTWAIT for non-blocking)
-            // Peek first to determine packet size
-            uint8_t peekBuf[128];
-            int valread = recv(client_socket, peekBuf, sizeof(peekBuf), MSG_DONTWAIT);
+            // 2. Command — recv 128-byte GrsRobotCommand from client
+            GrsRobotCommand extCmd;
+            int valread = recv(client_socket, &extCmd, sizeof(GrsRobotCommand), MSG_DONTWAIT);
             
             if (valread == (int)sizeof(GrsRobotCommand)) {
-                // Extended 128-byte command
-                if (!protocol_detected) {
-                    protocol_detected = true;
-                    std::cout << "[Network] Extended protocol detected (128-byte)" << std::endl;
-                }
-                GrsRobotCommand extCmd;
-                std::memcpy(&extCmd, peekBuf, sizeof(GrsRobotCommand));
-                
                 // Log the command
                 logGrsCommand(extCmd);
 
-                // Push to extended queue for rt_loop processing
+                // Push to command queue for rt_loop processing
                 ext_cmd_q.push(extCmd);
-
-                // Also create a legacy RobotCommand for I/O operations
-                // so rt_loop can apply outputs via EtherCAT
-                if (extCmd.cmd_type == GRS_CMD_OUTPUT || extCmd.cmd_type == GRS_CMD_SET_ALL_OUTPUTS) {
-                    GrsRobotCommand legacyCmd{};
-                    legacyCmd.cmd_id = extCmd.cmd_id;
-                    legacyCmd.set_outputs = extCmd.set_outputs;
-                    legacyCmd.soft_stops = extCmd.soft_stops;
-                    ext_cmd_q.push(legacyCmd);
-                }
 
             } else if (valread == 0) {
                 // Client disconnected

@@ -8,8 +8,8 @@ namespace BeckoffModules{};
 #pragma pack(push, 1) 
 
 // ═══════════════════════════════════════════════════════════════
-// Extended Protocol — Full Robot Command (Motion + I/O + Wait)
-// GRS Interpreter -> Hardware Controller
+// Unified Protocol — Motion + I/O + Wait (single format)
+// GRS Interpreter <-> Hardware Controller
 // ═══════════════════════════════════════════════════════════════
 
 enum GrsCommandType : uint8_t {
@@ -38,14 +38,14 @@ inline std::string grsCommandTypeName(uint8_t type) {
     return "UNKNOWN";
 }
 
-// Extended command: carries motion, wait, and I/O data
+// Command: carries motion, wait, and I/O data
 // Total: 128 bytes (fixed size for easy parsing)
 struct GrsRobotCommand {
     uint64_t cmd_id;           // 8   - sequential command ID
     uint8_t  cmd_type;         // 1   - GrsCommandType enum
     uint8_t  io_index;         // 1   - I/O bit index (0-based, for OUTPUT)
     uint8_t  io_value;         // 1   - I/O value (0 or 1)
-    uint8_t  set_outputs;      // 1   - full output byte (legacy compat)
+    uint8_t  set_outputs;      // 1   - full output byte (for SET_ALL_OUTPUTS)
     uint8_t  soft_stops;       // 1   - soft emergency stop
     uint8_t  reserved[3];      // 3   - future use
     double   wait_time;        // 8   - wait duration in ms (for WAIT)
@@ -55,7 +55,7 @@ struct GrsRobotCommand {
 };
 // sizeof(GrsRobotCommand) = 128
 
-// Extended state: carries robot position + I/O state
+// State: carries robot position + I/O state
 // Hardware Controller -> GRS Interpreter
 // Total: 128 bytes
 struct GrsRobotState {
