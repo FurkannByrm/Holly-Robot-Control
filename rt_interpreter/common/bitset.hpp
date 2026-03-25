@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace holly_bitset{
+namespace holy_bitset{
 
 enum class Bit : uint8_t {
 

@@ -1,19 +1,8 @@
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <unistd.h>
-#include <iostream>
-#include <iomanip>
-#include <cstring>
-#include <atomic>
-#include <bitset>
-#include "protocol.hpp"
-#include "spsc_queue.hpp"
+#include "pc_ecrt/network_server.hpp"
 
-// ═══════════════════════════════════════════════════════════════
-// Log extended GRS command in human-readable format
-// ═══════════════════════════════════════════════════════════════
-static void logGrsCommand(const GrsRobotCommand& cmd) {
+namespace  {
+
+void logGrsCommand(const GrsRobotCommand& cmd) {
     std::cout << "  [GRS CMD #" << cmd.cmd_id << "] " 
               << grsCommandTypeName(cmd.cmd_type);
 
@@ -84,11 +73,12 @@ static void logGrsCommand(const GrsRobotCommand& cmd) {
     std::cout << std::endl;
 }
 
-void network_server_func(SPSCQueue<RobotState, 128>& s_q, 
-                         SPSCQueue<RobotCommand, 128>& c_q, 
+}
+
+
+void network_server_func(SPSCQueue<GrsRobotState, 128>& s_q, 
                          SPSCQueue<GrsRobotCommand, 128>& ext_cmd_q,
-                         std::atomic<bool>& run,
-                         std::atomic<bool>& ext_mode) {
+                         std::atomic<bool>& run) {
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) return;
@@ -119,13 +109,11 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
         std::cout << "[Network] Client connected!" << std::endl;
 
         // Auto-detect protocol on first recv
-        bool client_extended = false;
         bool protocol_detected = false;
 
         while (client_socket > 0 && run) {
             // 1. State — send to client (format depends on detected protocol)
-            if (client_extended) {
-                // Build extended state from legacy queue + simulated position
+            // Build extended state from legacy queue + simulated position
                 auto state = s_q.pop();
                 if (state) {
                     GrsRobotState extState{};
@@ -140,14 +128,7 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
                     ssize_t sent = send(client_socket, &extState, sizeof(GrsRobotState), MSG_NOSIGNAL);
                     if (sent <= 0) break;  // Client disconnected
                 }
-            } else {
-                auto state = s_q.pop();
-                if (state) {
-                    ssize_t sent = send(client_socket, &(*state), sizeof(RobotState), MSG_NOSIGNAL);
-                    if (sent <= 0) break;  // Client disconnected
-                }
-            }
-
+             
             // 2. Command — recv from client (MSG_DONTWAIT for non-blocking)
             // Peek first to determine packet size
             uint8_t peekBuf[128];
@@ -156,7 +137,6 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
             if (valread == (int)sizeof(GrsRobotCommand)) {
                 // Extended 128-byte command
                 if (!protocol_detected) {
-                    client_extended = true;
                     protocol_detected = true;
                     std::cout << "[Network] Extended protocol detected (128-byte)" << std::endl;
                 }
@@ -171,30 +151,13 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
 
                 // Also create a legacy RobotCommand for I/O operations
                 // so rt_loop can apply outputs via EtherCAT
-                if (extCmd.cmd_type == GRS_CMD_OUTPUT) {
-                    RobotCommand legacyCmd{};
+                if (extCmd.cmd_type == GRS_CMD_OUTPUT || extCmd.cmd_type == GRS_CMD_SET_ALL_OUTPUTS) {
+                    GrsRobotCommand legacyCmd{};
                     legacyCmd.cmd_id = extCmd.cmd_id;
                     legacyCmd.set_outputs = extCmd.set_outputs;
                     legacyCmd.soft_stops = extCmd.soft_stops;
-                    c_q.push(legacyCmd);
-                } else if (extCmd.cmd_type == GRS_CMD_SET_ALL_OUTPUTS) {
-                    RobotCommand legacyCmd{};
-                    legacyCmd.cmd_id = extCmd.cmd_id;
-                    legacyCmd.set_outputs = extCmd.set_outputs;
-                    legacyCmd.soft_stops = extCmd.soft_stops;
-                    c_q.push(legacyCmd);
+                    ext_cmd_q.push(legacyCmd);
                 }
-
-            } else if (valread == (int)sizeof(RobotCommand)) {
-                // Legacy 16-byte command
-                if (!protocol_detected) {
-                    client_extended = false;
-                    protocol_detected = true;
-                    std::cout << "[Network] Legacy protocol detected (16-byte)" << std::endl;
-                }
-                RobotCommand cmd;
-                std::memcpy(&cmd, peekBuf, sizeof(RobotCommand));
-                c_q.push(cmd);
 
             } else if (valread == 0) {
                 // Client disconnected
@@ -206,13 +169,12 @@ void network_server_func(SPSCQueue<RobotState, 128>& s_q,
             if (!s_q.pop()) usleep(500);
         }
         close(client_socket);
-        ext_mode.store(false);
         
         // Clear all outputs when client disconnects (safety)
-        RobotCommand clearCmd{};
+        GrsRobotCommand clearCmd{};
         clearCmd.set_outputs = 0;
         clearCmd.soft_stops = 0;
-        c_q.push(clearCmd);
+        ext_cmd_q.push(clearCmd);
         
         std::cout << "[Network] Client disconnected. Outputs cleared." << std::endl;
     }

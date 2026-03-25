@@ -2,31 +2,10 @@
 #define PROTOCOL_HPP
 
 #include <cstdint>
+#include <string>
+namespace BeckoffModules{};
 
 #pragma pack(push, 1) 
-
-// ═══════════════════════════════════════════════════════════════
-// Legacy Protocol — EtherCAT I/O only (EL1008 + EL2008)
-// ═══════════════════════════════════════════════════════════════
-
-struct RobotState {
-    uint64_t seq_id;         
-    uint32_t timestamp;     
-    uint8_t  inputs;       
-    uint8_t  outputs;        
-    uint8_t  is_hardware_emg; 
-    uint8_t  system_ready;   
-    uint8_t  padding[2];    
-};
-// sizeof(RobotState) = 18
-
-struct RobotCommand {
-    uint64_t cmd_id;       
-    uint8_t  set_outputs; 
-    uint8_t  soft_stops; 
-    uint8_t  padding[6];     // Alignment
-};
-// sizeof(RobotCommand) = 16
 
 // ═══════════════════════════════════════════════════════════════
 // Extended Protocol — Full Robot Command (Motion + I/O + Wait)
@@ -49,8 +28,8 @@ enum GrsCommandType : uint8_t {
 };
 
 // Human-readable command type names for logging
-inline const char* grsCommandTypeName(uint8_t type) {
-    static const char* names[] = {
+inline std::string grsCommandTypeName(uint8_t type) {
+    static std::string names[] = {
         "NOP", "PTP", "PTP_REL", "LIN", "LIN_REL",
         "CIRC", "CIRC_REL", "SPLINE", "SPLINE_REL",
         "WAIT", "OUTPUT", "SET_ALL_OUTPUTS"
